@@ -1,0 +1,4 @@
+#+TITLE: Random MOP's
+
+The raw MOP (in .org format) are in MOP/ and some maybe more useful
+exported versions are in the Exports directory.
