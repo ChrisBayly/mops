@@ -1,0 +1,1942 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2025-10-17 Fri 12:34 -->
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Solaris EMC to Hitachi Storage Migration</title>
+<meta name="author" content=" Chris Bayly" />
+<meta name="generator" content="Org Mode" />
+<link rel="stylesheet" type="text/css" href="https://fniessen.github.io/org-html-themes/src/readtheorg_theme/css/htmlize.css"/>
+<link rel="stylesheet" type="text/css" href="https://fniessen.github.io/org-html-themes/src/readtheorg_theme/css/readtheorg.css"/>
+<link rel="stylesheet" type="text/css" href="src/readtheorg_theme/css/search.css"/>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.4/js/bootstrap.min.js"></script>
+<script type="text/javascript" src="https://fniessen.github.io/org-html-themes/src/lib/js/jquery.stickytableheaders.min.js"></script>
+<script type="text/javascript" src="https://fniessen.github.io/org-html-themes/src/readtheorg_theme/js/search.js"></script>
+<script type="text/javascript" src="https://fniessen.github.io/org-html-themes/src/readtheorg_theme/js/readtheorg.js"></script>
+</head>
+<body>
+<div id="content" class="content">
+<h1 class="title">Solaris EMC to Hitachi Storage Migration</h1>
+<div id="table-of-contents" role="doc-toc">
+<h2>Table of Contents</h2>
+<div id="text-table-of-contents" role="doc-toc">
+<ul>
+<li><a href="#org613b20b">1. Before you start</a></li>
+<li><a href="#orga97f01a">2. Solaris 8 &amp; 9 notes</a>
+<ul>
+<li><a href="#org1f3c12b">2.1. Getting HBA WWN's</a></li>
+<li><a href="#org4718d1f">2.2. Force (re)install of SPS before reboot after PowerPath removal.</a></li>
+<li><a href="#orgd9df06f">2.3. Read Kurts migration especially the parts about installing the SFS stack and the FCA utilities.</a></li>
+</ul>
+</li>
+<li><a href="#orgbfeac8c">3. Rebooting SPARC and x86 Architecture hosts.</a>
+<ul>
+<li><a href="#orgf50560b">3.1. Reboots on x86</a></li>
+<li><a href="#org509658e">3.2. Rebooting split mirrors on SPARC</a></li>
+</ul>
+</li>
+<li><a href="#orgc9f5df6">4. Labeling, Partitioning, Slices, and EMC naming conventions</a>
+<ul>
+<li><a href="#orgb08b22e">4.1. Partitioning (Solaris x86 only).</a></li>
+<li><a href="#orga2fae91">4.2. Labeling and Slices</a></li>
+<li><a href="#org565dd8a">4.3. EMC PowerPath disk naming</a></li>
+</ul>
+</li>
+<li><a href="#org2d6a0d0">5. Break the root and var mirrors</a></li>
+<li><a href="#org3be6a2b">6. Prepare the host for upgrading</a></li>
+<li><a href="#org942ff63">7. Export ZFS pools BEFORE powerpath goes away</a></li>
+<li><a href="#org8fa51b4">8. Remove EMC PowerPath</a>
+<ul>
+<li><a href="#org4d75f9e">8.1. (Optionally) Reboot the host and reconfigure:</a></li>
+</ul>
+</li>
+<li><a href="#orgb2e821b">9. Enable MPXIO</a></li>
+<li><a href="#orgd82c761">10. Fix up the md.tab</a></li>
+<li><a href="#org16695ab">11. Fix the metadevices</a></li>
+<li><a href="#org7871963">12. Preparation of destination (Hitachi) disks</a></li>
+<li><a href="#org6968e0a">13. Mirroring the disks (why we are here&#x2026;)</a>
+<ul>
+<li><a href="#org90a2a98">13.1. Metadevices without existing mirror devices</a></li>
+<li><a href="#org427ddee">13.2. Metadevices with existing mirror devices</a></li>
+<li><a href="#org70cc140">13.3. After the mirroring starts</a></li>
+</ul>
+</li>
+<li><a href="#org7a1702b">14. Things to do before the end of the change</a>
+<ul>
+<li><a href="#org7eca0f3">14.1. Restore the autoboot flag to the zones that were modified in "Prepare the host for upgrading":</a></li>
+<li><a href="#orgf1f4dc1">14.2. Fix /etc/vfstab</a></li>
+<li><a href="#orga7560fd">14.3. (Optional) Sync root &amp; /var mirrors</a></li>
+<li><a href="#org6a38c78">14.4. Check the state of the system bootlist (eeprom)</a></li>
+<li><a href="#org0b043de">14.5. Final sanity reboot and checks of above steps</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+<p>
+This MOP is only an outline, there are many sections that cannot
+describe what will happen on a particular host. And many cases where
+you will not know details about the current step until you get there
+(i.e. things impossible to capture before the change).  You will need
+to adapt this MOP to your host, and blindly following this MOP could
+lead to loss of data.
+</p>
+
+<p>
+This is also not the original form of this document. If any changes
+need to be made, let me (Chris Bayly) know and I'll put them into the
+source document.
+</p>
+<div id="outline-container-org613b20b" class="outline-2">
+<h2 id="org613b20b"><span class="section-number-2">1.</span> Before you start</h2>
+<div class="outline-text-2" id="text-1">
+<p>
+Here is a list of files/information you should have on hand before you
+begin the change.  It's possible this information will already be
+around if the system has been scanned as part of the pre-migration
+work.
+</p>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<thead>
+<tr>
+<th scope="col" class="org-left">What</th>
+<th scope="col" class="org-left">Command/URL</th>
+<th scope="col" class="org-left">Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-left">Physical Location</td>
+<td class="org-left"><a href="http://ludb2.corp.ads">http://ludb2.corp.ads</a></td>
+<td class="org-left">In the worst case you will need someone on-site</td>
+</tr>
+
+<tr>
+<td class="org-left">Full list of zones</td>
+<td class="org-left">zoneadm list -civ</td>
+<td class="org-left">You need to know what was or wasn't running so the server can be brought back to the same state.</td>
+</tr>
+
+<tr>
+<td class="org-left">List of luns and devices</td>
+<td class="org-left">inq</td>
+<td class="org-left">You will need to know the emcpower device name and the long name (c0500&#x2026;.) for each device.</td>
+</tr>
+
+<tr>
+<td class="org-left">Kernel level and host architecture</td>
+<td class="org-left">uname -a</td>
+<td class="org-left">Architecture will determine how you label disks.  Kernel version is a basic check to make sure the host is at least Update 3 of Solaris 10</td>
+</tr>
+
+<tr>
+<td class="org-left">SVM disk data</td>
+<td class="org-left">metastat -c</td>
+<td class="org-left">No matter what happens during the change you will know where you started.</td>
+</tr>
+
+<tr>
+<td class="org-left">eeprom data</td>
+<td class="org-left">eeprom</td>
+<td class="org-left">Details about existing boot devices</td>
+</tr>
+
+<tr>
+<td class="org-left">zpool checks</td>
+<td class="org-left">zpool iostat -v</td>
+<td class="org-left">&#xa0;</td>
+</tr>
+
+<tr>
+<td class="org-left">Sun Healthcheck Data</td>
+<td class="org-left">cat /root/sunhlth/`hostname`.out</td>
+<td class="org-left">How healthy was the host.  Did the migration make it better or worse?</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div id="outline-container-orga97f01a" class="outline-2">
+<h2 id="orga97f01a"><span class="section-number-2">2.</span> Solaris 8 &amp; 9 notes</h2>
+<div class="outline-text-2" id="text-2">
+</div>
+<div id="outline-container-org1f3c12b" class="outline-3">
+<h3 id="org1f3c12b"><span class="section-number-3">2.1.</span> Getting HBA WWN's</h3>
+<div class="outline-text-3" id="text-2-1">
+<pre class="example" id="orga376af1">
+#!/bin/sh
+for i in `cfgadm |grep fc-fabric|awk '{print $1}'`;
+do
+  dev="`cfgadm -lv $i|grep devices |awk '{print $NF}'`" 
+  wwn="`luxadm -e dump_map $dev |grep 'Host Bus'|awk '{print $4}'`"
+echo "$i: $wwn"
+done
+</pre>
+</div>
+</div>
+<div id="outline-container-org4718d1f" class="outline-3">
+<h3 id="org4718d1f"><span class="section-number-3">2.2.</span> Force (re)install of SPS before reboot after PowerPath removal.</h3>
+<div class="outline-text-3" id="text-2-2">
+<p>
+sedm3424 experienced hard lockups when using an older version of ledville.
+</p>
+</div>
+</div>
+<div id="outline-container-orgd9df06f" class="outline-3">
+<h3 id="orgd9df06f"><span class="section-number-3">2.3.</span> Read <a href="http://qadev115/wiki/index.php/SEDM1046_-_Hitachi_Storage_Migration_Test#Install_SFS_stack_.28aka_Leadville.29">Kurts migration</a> especially the parts about installing the SFS stack and the FCA utilities.</h3>
+</div>
+</div>
+<div id="outline-container-orgbfeac8c" class="outline-2">
+<h2 id="orgbfeac8c"><span class="section-number-2">3.</span> Rebooting SPARC and x86 Architecture hosts.</h2>
+<div class="outline-text-2" id="text-3">
+<p>
+Solaris on SPARC and x86 have some fundamental differences in how the
+handle disks and how they handle booting in a mirrored setup.  The
+info in this section detailing how to boot to either side of the
+mirror should be applied to any reboot required during the change.
+This section will detail how to either side of the mirrored root
+disks.
+</p>
+</div>
+<div id="outline-container-orgf50560b" class="outline-3">
+<h3 id="orgf50560b"><span class="section-number-3">3.1.</span> Reboots on x86</h3>
+<div class="outline-text-3" id="text-3-1">
+</div>
+<div id="outline-container-orgcc77cbd" class="outline-4">
+<h4 id="orgcc77cbd"><span class="section-number-4">3.1.1.</span> Modify grub on x86 hardware.</h4>
+<div class="outline-text-4" id="text-3-1-1">
+<p>
+If we are on an x86 arch host ("arch" returns i86pc) we will want to
+edit /boot/grub/menu.lst and add in the backout entry. Quite likely
+you will want to add this stanza to the end of the file (checking that
+there isn't one already there.)
+</p>
+
+<pre class="example" id="org2bbcebb">
+title Solaris BACKOUT DISK
+root (hd1,0,a)
+kernel /platform/i86pc/multiboot
+module /platform/i86pc/boot_archive
+</pre>
+
+<p>
+The grub name for hd1 here will have to be discovered by the SA.  They
+are LIKELY hd0 for the initial disk and hd1 for the second but there
+is nothing that guarantees this&#x2026; Gotta love x86 hardware.
+</p>
+</div>
+</div>
+<div id="outline-container-orga4ac0ba" class="outline-4">
+<h4 id="orga4ac0ba"><span class="section-number-4">3.1.2.</span> Rebooting split mirrors on x86</h4>
+<div class="outline-text-4" id="text-3-1-2">
+<p>
+To successfully reboot between the two sides of the split mirrors on
+x86 requires editing a few files.
+</p>
+
+<p>
+First, edit /boot/solaris/bootenv.rc and edit the line that sets the
+bootpath, and make it use the second disk.  For the example host I'm
+using it looks like this before the edit:
+</p>
+
+<pre class="example" id="orgb025c1d">
+setprop bootpath '/pci@0,0/pci10de,5d@c/pci1000,1000@0/sd@0,0:a'
+</pre>
+
+<p>
+And this after the edit:
+</p>
+<pre class="example" id="orgb15ceec">
+setprop bootpath '/pci@0,0/pci10de,5d@c/pci1000,1000@0/sd@1,0:a'
+</pre>
+
+<p>
+Your host might be different, so here's how you can find the device
+names for the two disks.  This line assumes that the mirror split
+above has been completed.  If for what ever reason this script doesn't
+work, look at the disk device backing d0 and d90 and do an ls against
+slice zero of that disk.
+</p>
+
+<pre class="example" id="org85fe9fb">
+# for blah in `(metastat d0 | tail -1 ; metastat d90 | tail -1 ) | awk '{print $1;}'`  ; do ls -ld /dev/dsk/${blah}s0 ; done
+lrwxrwxrwx   1 root     root          58 Nov 21  2007 /dev/dsk/c2t0d0s0 -&gt; ../../devices/pci@0,0/pci10de,5d@c/pci1000,1000@0/sd@0,0:a
+lrwxrwxrwx   1 root     root          58 Nov 21  2007 /dev/dsk/c2t1d0s0 -&gt; ../../devices/pci@0,0/pci10de,5d@c/pci1000,1000@0/sd@1,0:a
+</pre>
+
+<p>
+Note the PCI device names that are linked to.
+</p>
+
+<p>
+After this change is complete reboot the host and choose the backout disk from the menu.
+</p>
+<pre class="example" id="org8e0b9a8">
+# reboot
+</pre>
+
+<p>
+Check that you are on the backout disk.
+</p>
+
+<pre class="example" id="org011deaa">
+# df -k / /var
+Filesystem            kbytes    used   avail capacity  Mounted on
+/dev/md/dsk/d90      8266719 1649464 6534588    21%    /
+/dev/md/dsk/d93      8266719 1221881 6962171    15%    /var
+# ls -ld /*disk* /var/*disk*
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /backoutdisk
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /var/backoutvardisk
+</pre>
+
+<p>
+Reboot back to the change disk, choosing the normal entry in grub.
+</p>
+
+<pre class="example" id="org9b956d2">
+# reboot
+</pre>
+
+<p>
+Verify you are back on the disk we are going to change:
+</p>
+
+<pre class="example" id="org9d63381">
+# df -k / /var
+Filesystem            kbytes    used   avail capacity  Mounted on
+/dev/md/dsk/d0       8266719 1649464 6534588    21%    /
+/dev/md/dsk/d3       8266719 1221881 6962171    15%    /var
+# ls -ld /*disk* /var/*disk*
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /changedisk
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /var/changevardisk
+</pre>
+</div>
+</div>
+</div>
+<div id="outline-container-org509658e" class="outline-3">
+<h3 id="org509658e"><span class="section-number-3">3.2.</span> Rebooting split mirrors on SPARC</h3>
+<div class="outline-text-3" id="text-3-2">
+<p>
+On SPARC hardware tell the proms which disk you want&#x2026;
+</p>
+<pre class="example" id="org89869ec">
+# reboot md-rootdisk1
+</pre>
+
+<p>
+Verify that the backout environment is sane (everything mounts, /var/
+is running on the mirror copy, etc).  Fix ANYTHING that seems out of
+place at this point. Check for the existence of /backoutdisk!
+</p>
+
+<pre class="example" id="org6c8bd47">
+# df -k / /var
+Filesystem            kbytes    used   avail capacity  Mounted on
+/dev/md/dsk/d90      8266719 1649464 6534588    21%    /
+/dev/md/dsk/d93      8266719 1221881 6962171    15%    /var
+# ls -ld /*disk* /var/*disk*
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /backoutdisk
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /var/backoutvardisk
+</pre>
+
+
+<p>
+Reboot back to the change environment to begin the change:
+</p>
+
+<pre class="example" id="org90d7491">
+# reboot md-rootdisk0
+</pre>
+
+<p>
+Verify you are on the change disk side of the mirror.
+</p>
+
+<pre class="example" id="orgcc2180c">
+# df -k / /var
+Filesystem            kbytes    used   avail capacity  Mounted on
+/dev/md/dsk/d0      8266719 1649464 6534588    21%    /
+/dev/md/dsk/d3      8266719 1221881 6962171    15%    /var
+# ls -ld /*disk* /var/*disk*
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /changedisk
+-rw-r--r--   1 root     root           0 Oct 11 00:58 /var/changevardisk
+</pre>
+</div>
+</div>
+</div>
+<div id="outline-container-orgc9f5df6" class="outline-2">
+<h2 id="orgc9f5df6"><span class="section-number-2">4.</span> Labeling, Partitioning, Slices, and EMC naming conventions</h2>
+<div class="outline-text-2" id="text-4">
+<p>
+There are at least 4 different ways that disks are named in Solaris.
+Each of them is involved in most changes so it's important to
+recognize them.
+</p>
+</div>
+<div id="outline-container-orgb08b22e" class="outline-3">
+<h3 id="orgb08b22e"><span class="section-number-3">4.1.</span> Partitioning (Solaris x86 only).</h3>
+<div class="outline-text-3" id="text-4-1">
+<p>
+Solaris running on x86 hardware uses the PC BIOS naming convention for
+disks.  This convention places a partition table at the front edge of
+the disk and divides it in up to 4 physical partitions starting on
+cylinder boundaries.  On top of these 4 physical partitions there can
+be an arbitrary number of logical partitions contained in one of the 4
+physical.  Inside Solaris these partitions are designated with device
+names like the following (showing partitions 0 and 1):
+</p>
+
+<pre class="example" id="orgfde0f15">
+/dev/dsk/c0t0d0p0
+/dev/dsk/c0t0d0p1
+</pre>
+
+<p>
+Luckily most of the details of this can be avoided in the TELUS
+Environment as we generally only use the first PC BIOS partition on
+the disk (p0).  This partition is set up with a command something like
+this:
+</p>
+
+<pre class="example" id="orgb7b7a2a">
+fdisk -B /dev/rdsk/c8t1d2p0
+</pre>
+</div>
+</div>
+<div id="outline-container-orga2fae91" class="outline-3">
+<h3 id="orga2fae91"><span class="section-number-3">4.2.</span> Labeling and Slices</h3>
+<div class="outline-text-3" id="text-4-2">
+<p>
+Solaris naturally divides the disk into slices, that are tracked in a
+portion of the disk called the VTOC (Volume Table of Contents).  Each
+of these slices are defined by a starting cylinder and a size.  The
+slices are number from 0 - 7 on SPARC and 0 - 9 on x86.  The slices 2,
+8 and 9 are reserved for use by the system.  Most notably slice 2 is
+reserved to be the "all slice" that has a size equal to the entire
+disk.
+</p>
+
+<p>
+There are two methods that these slices can be read through, in block
+mode (all reads always return an entire 512 byte sector), or in
+character mode where the device is accessed through byte addressable
+methods.  Here is an example of device names for slice 0 on a disk in
+both block (/dev/dsk/) and in character modes (/dev/rdsk):
+</p>
+
+<pre class="example" id="org7018869">
+/dev/dsk/c2t0d0s0
+/dev/rdsk/c2t0d0s0
+</pre>
+
+<p>
+There are two main ways to determine the layout of the disk slices on
+a disk.  The first is to dump the VTOC label directly like this (note
+the use of the all slice):
+</p>
+
+<pre class="example" id="orgb2d79c7">
+root@sedm1817:~# prtvtoc /dev/rdsk/c2t0d0s2
+* /dev/rdsk/c2t0d0s2 partition map
+*
+* Dimensions:
+*     512 bytes/sector
+*      63 sectors/track
+*     255 tracks/cylinder
+*   16065 sectors/cylinder
+*    8923 cylinders
+*    8921 accessible cylinders
+*
+* Flags:
+*   1: unmountable
+*  10: read-only
+*
+*                          First     Sector    Last
+* Partition  Tag  Flags    Sector     Count    Sector  Mount Directory
+       0      2    00   32531625  16787925  49319549
+       1      3    01      16065  32515560  32531624
+       2      5    00          0 143315865 143315864
+       3      7    00   49319550  16787925  66107474
+       4      8    00   66107475   1060290  67167764
+       5      6    01   67167765  10490445  77658209
+       6      6    01   77658210  65625525 143283734
+       7     11    01  143283735     32130 143315864
+       8      1    01          0     16065     16064
+</pre>
+
+<p>
+We can see that this disk has 8 defined slices (so this must be an x86
+host), and you can see that slice 2 covers the entire disk from first
+sector to last.
+</p>
+
+<p>
+The second way to look at the slices on a disk is to use the format
+command.  Shown here is a shortcut to display the slices.
+</p>
+
+<pre class="example" id="orgfd888b9">
+root@sedm1817:~# printf "p\np\n" | format c2t0d0s2
+selecting c2t0d0s2
+[disk formatted]
+/dev/dsk/c2t0d0s0 is part of SVM volume stripe:d10. Please see metaclear(1M).
+/dev/dsk/c2t0d0s1 is part of SVM volume stripe:d11. Please see metaclear(1M).
+/dev/dsk/c2t0d0s3 is part of SVM volume stripe:d13. Please see metaclear(1M).
+/dev/dsk/c2t0d0s4 is part of SVM volume stripe:d14. Please see metaclear(1M).
+/dev/dsk/c2t0d0s5 is part of active ZFS pool tools. Please see zpool(1M).
+/dev/dsk/c2t0d0s6 is part of SVM volume stripe:d16. Please see metaclear(1M).
+/dev/dsk/c2t0d0s7 contains an SVM mdb. Please see metadb(1M).
+
+
+FORMAT MENU:
+        disk       - select a disk
+        type       - select (define) a disk type
+        partition  - select (define) a partition table
+        current    - describe the current disk
+        format     - format and analyze the disk
+        fdisk      - run the fdisk program
+        repair     - repair a defective sector
+        label      - write label to the disk
+        analyze    - surface analysis
+        defect     - defect list management
+        backup     - search for backup labels
+        verify     - read and display labels
+        save       - save new disk/partition definitions
+        inquiry    - show vendor, product and revision
+        volname    - set 8-character volume name
+        !&lt;cmd&gt;     - execute &lt;cmd&gt;, then return
+        quit
+format&gt;
+
+PARTITION MENU:
+        0      - change `0' partition
+        1      - change `1' partition
+        2      - change `2' partition
+        3      - change `3' partition
+        4      - change `4' partition
+        5      - change `5' partition
+        6      - change `6' partition
+        7      - change `7' partition
+        select - select a predefined table
+        modify - modify a predefined partition table
+        name   - name the current table
+        print  - display the current table
+        label  - write partition map and label to the disk
+        !&lt;cmd&gt; - execute &lt;cmd&gt;, then return
+        quit
+partition&gt; Current partition table (original):
+Total disk cylinders available: 8921 + 2 (reserved cylinders)
+
+Part      Tag    Flag     Cylinders        Size            Blocks
+  0       root    wm    2025 - 3069        8.01GB    (1045/0/0)  16787925
+  1       swap    wu       1 - 2024       15.50GB    (2024/0/0)  32515560
+  2     backup    wm       0 - 8920       68.34GB    (8921/0/0) 143315865
+  3        var    wm    3070 - 4114        8.01GB    (1045/0/0)  16787925
+  4       home    wm    4115 - 4180      517.72MB    (66/0/0)     1060290
+  5      stand    wu    4181 - 4833        5.00GB    (653/0/0)   10490445
+  6      stand    wu    4834 - 8918       31.29GB    (4085/0/0)  65625525
+  7   reserved    wu    8919 - 8920       15.69MB    (2/0/0)        32130
+  8       boot    wu       0 -    0        7.84MB    (1/0/0)        16065
+  9 unassigned    wu       0               0         (0/0/0)            0
+
+partition&gt;
+root@sedm1817:~#
+</pre>
+</div>
+</div>
+<div id="outline-container-org565dd8a" class="outline-3">
+<h3 id="org565dd8a"><span class="section-number-3">4.3.</span> EMC PowerPath disk naming</h3>
+<div class="outline-text-3" id="text-4-3">
+<p>
+EMC PowerPath on Solaris names disks slightly differently than stock
+Solaris.  When set up, PowerPath discovers all of the paths to a
+particular disk on a SAN, and gives them a Pseudo name something like
+"emcpower2a".  You can interrogate this name with the following command:
+</p>
+
+<pre class="example" id="org8825bdc">
+root@sedm1817:~# /etc/powermt display dev=emcpower2a
+Pseudo name=emcpower2a
+CLARiiON ID=APM00062606926
+Logical device ID=6006016045AB1A00B24F60C1E6A8DC11
+state=alive; policy=CLAROpt; priority=0; queued-IOs=0
+Owner: default=SP B, current=SP B
+==============================================================================
+---------------- Host ---------------   - Stor -   -- I/O Path -  -- Stats ---
+###  HW Path                I/O Paths    Interf.   Mode    State  Q-IOs Errors
+==============================================================================
+3073 pci@0,0/pci10de,5d@d/pci10df,fc2e@0,1/fp@0,0 c4t5006016239A0111Ed1s0 SP A2     active  alive      0      1
+3073 pci@0,0/pci10de,5d@d/pci10df,fc2e@0,1/fp@0,0 c4t5006016A39A0111Ed1s0 SP B2     active  alive      0      1
+</pre>
+
+<p>
+There is a lot of information available, but what is of interest right
+now is the Pseudo name.  emcpower2a describes a disk (emcpower2) and
+it's first slice (a).  The second slice on that disk is named
+emcpower2b, and so on.
+</p>
+
+<p>
+Pay close attention to the letter designating the slice as it is easy
+to get confused with the naming conventions.  If the disk name is
+being converted from PowerPath to native naming emcpower2a will always
+refer to the first slice (s0) on a disk.  So for example:
+</p>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<tbody>
+<tr>
+<td class="org-left">emcpower2a</td>
+<td class="org-left">c5t0d0s0</td>
+</tr>
+
+<tr>
+<td class="org-left">emcpower2b</td>
+<td class="org-left">c5t0d0s1</td>
+</tr>
+
+<tr>
+<td class="org-left">emcpower2c</td>
+<td class="org-left">c5t0d0s2</td>
+</tr>
+</tbody>
+</table>
+
+<p>
+I've chosen the c5t0d0 portion of the name at random, but the name of
+the slices is what's important.
+</p>
+</div>
+</div>
+</div>
+<div id="outline-container-org2d6a0d0" class="outline-2">
+<h2 id="org2d6a0d0"><span class="section-number-2">5.</span> Break the root and var mirrors</h2>
+<div class="outline-text-2" id="text-5">
+<pre class="example" id="orgb9085db">
+# df -k / /var
+Filesystem            kbytes    used   avail capacity  Mounted on
+/dev/md/dsk/d0       8262869 6438082 1742159    79%    /
+/dev/md/dsk/d3       8262869 5164906 3015335    64%    /var
+</pre>
+
+<p>
+Grab the meta devices that root and var are mounted on, for this
+example I'm assuming d0 and d3.  All of the drive names (meta and raw
+devices) are examples for the purpose of making this MOP coherent,
+your metadevices and device names will likely be different.
+</p>
+
+<pre class="example" id="org82480f9">
+# metastat -p d0 d3
+d0 -m d10 d20 1
+d10 1 1 c0t0d0s0
+d20 1 1 c0t1d0s0
+d3 -m d13 d23 1
+d13 1 1 c0t0d0s3
+d23 1 1 c0t1d0s3
+</pre>
+
+<p>
+Make note of the raw devices for each metadevice.   Detach the backout disk:
+</p>
+
+<pre class="example" id="org1a50c0a">
+sync ; sync ; sync
+metadetach d0 d20
+metadetach d3 d23
+</pre>
+
+<p>
+Create a new boot mirror for the backout disk and mount it.
+</p>
+
+<pre class="example" id="org32b9a54">
+metainit d90 -m d20
+metainit d93 -m d23
+fsck -y /dev/md/rdsk/d90
+fsck -y /dev/md/rdsk/d93
+mount /dev/md/dsk/d90 /a
+mount /dev/md/dsk/d93 /a/var
+</pre>
+
+<p>
+Modify the backout environment to allow it to boot cleanly.
+</p>
+
+<pre class="example" id="org00f76d9">
+metaroot -k /a/etc/system -v /a/etc/vfstab d90
+grep rootdev /a/etc/system   # Make sure its d90
+grep var /a/etc/vfstab       # Make sure its d93 change /a/etc/vfstab if its not
+touch /a/backoutdisk
+touch /a/var/backoutvardisk
+# Create the devices for our newly created MD mirrors
+ls -l /dev/md/*dsk/d9[03]|nawk '{printf "ln -s %s /a%s\n", $NF, $(NF-2)}'
+ln -s ../../../devices/pseudo/md@0:0,90,blk /a/dev/md/dsk/d90
+ln -s ../../../devices/pseudo/md@0:0,93,blk /a/dev/md/dsk/d93
+ln -s ../../../devices/pseudo/md@0:0,90,raw /a/dev/md/rdsk/d90
+ln -s ../../../devices/pseudo/md@0:0,93,raw /a/dev/md/rdsk/d93
+touch /changedisk            # Touch files to make sure we know which environment we are on
+touch /var/changevardisk     # also one for /var
+bootadm update-archive -v -R /a   # this might be dependant on the version of solaris if you are on SPARC hardware?!?
+bootadm update-archive -v         # this might be dependant on the version of solaris if you are on SPARC hardware?!?
+umount /a/var
+umount /a
+</pre>
+
+<p>
+Reboot to the backout disk to make sure the backout will work. Refer to the section <a href="#orgbfeac8c">Rebooting SPARC and x86 Architecture hosts.</a>
+</p>
+</div>
+</div>
+<div id="outline-container-org3be6a2b" class="outline-2">
+<h2 id="org3be6a2b"><span class="section-number-2">6.</span> Prepare the host for upgrading</h2>
+<div class="outline-text-2" id="text-6">
+<p>
+Check the output of the zone information gathered in "<a href="#org613b20b">Before you
+start</a>", for all of the running zones set their autoboot property to
+false so they do not interfere with later disk mounts and
+unmounts. Run the following shell script:
+</p>
+
+<pre class="example" id="orgfd49551">
+for blah in `zoneadm list -civ | awk '/running    \/zones/ {print $2;}'`
+ do zonecfg -z $blah set autoboot=false
+done
+</pre>
+
+<p>
+Comment out any mounts of the disks we are going to be modifying,
+basically all non-system mounts on metadisks.  In particular many of
+our systems have entries for filesystems in /zones/ like this:
+</p>
+
+<pre class="example" id="org4b2bbea">
+/dev/md/dsk/d82         /dev/md/rdsk/d82        /zloop/sedm1825/apps/infra/weblogic     ufs     3       yes     logging
+/dev/md/dsk/d83         /dev/md/rdsk/d83        /zloop/sedm1825/apps/infra/java ufs     3       yes     logging
+
+### ZONES ###
+#/dev/md/dsk/d100      /dev/md/rdsk/d100       /zones/sedm1825ca       ufs     3       yes     logging
+/dev/md/dsk/d120        /dev/md/rdsk/d120       /zones/sedm1825cb       ufs     3       yes     logging
+/dev/md/dsk/d140        /dev/md/rdsk/d140       /zones/sedm1825cc       ufs     3       yes     logging
+/dev/md/dsk/d160        /dev/md/rdsk/d160       /zones/sedm1825cd       ufs     3       yes     logging
+</pre>
+
+<p>
+At this point you can either shutdown all the zones manually, and then
+unmount all of the filesystems on disks we will be working on, or you
+can reboot the host.  You will also want to run "unshareall" before
+unmounting the filesystes, in case they are being used for NFS
+exports. Refer to the section <a href="#orgbfeac8c">Rebooting SPARC and x86 Architecture
+hosts</a> if you decide to reboot the host.
+</p>
+</div>
+</div>
+<div id="outline-container-org942ff63" class="outline-2">
+<h2 id="org942ff63"><span class="section-number-2">7.</span> Export ZFS pools BEFORE powerpath goes away</h2>
+<div class="outline-text-2" id="text-7">
+<p>
+Before PowerPath is removed from the host, and before MPXIO takes over
+as the multipathing agent, we need to take care of the ZFS
+filesystems.  This is done out of order due to how ZFS stores device
+information in its database (the ZDB).  It will not Lets look at a sample ZFS pool
+to use for an example.
+</p>
+
+<pre class="example" id="org45d5695">
+# zpool iostat -v wikipool
+                capacity     operations    bandwidth
+pool          used  avail   read  write   read  write
+-----------  -----  -----  -----  -----  -----  -----
+wikipool     75.8G  28.7G      5      0   673K  1.01K
+  emcpower0a 75.8G  28.7G      5      0   673K  1.01K
+-----------  -----  -----  -----  -----  -----  -----
+</pre>
+
+<p>
+Our pool is backed by a single EMC disk emcpower0a.  We need to select
+a Hitachi LUN to mirror this to from the list.
+</p>
+
+<pre class="example" id="org78ffd95">
+# inq -no_dots
+... &lt; cut lines &gt; ...
+/dev/rdsk/c2t3d14s2 :HITACHI :OPEN-V          :8001  :5030DC40   :110100480
+... &lt; cut lines &gt; ...
+</pre>
+
+<p>
+Now we need to attach the new storage to the pool, in ZFS terms
+attaching a volume will mirror the existing disk to the new one.
+(Read the man pages on "zpool" if this operation involves more than a
+single new LUN).
+</p>
+
+<p>
+Prepare the new Hitachi LUN for writing.  We want to duplicate the
+disk layout of the original disk.  If the new LUN is larger than the
+original LUN, it is okay if the new partitions are larger than the
+originals, but they CANNOT be smaller.
+</p>
+
+<pre class="example" id="org058a7c7">
+# fdisk -B /dev/rdsk/c2t3d14s2   # if on x86
+# format /dev/rdsk/c2t3d14s2
+...  ensure that the slices match the original disk (s0 in our case) ...
+# zpool attach wikipool emcpower0a c2t3d14s0
+#+END_EXAMPLE# zpool status wikipool
+
+At this point the pool should be resilvering the data.  Once this is
+complete, it might take a while, we want to remove the EMC disk from
+the pool, and then export it.  The -f flag to "zpool export" will
+unmount any active filesystems.
+
+#+BEGIN_EXAMPLE
+# zpool detach wikipool emcpower0a
+# zpool export -f wikipool
+</pre>
+
+<p>
+Repeat these steps for all ZFS pools.  They can be done serially or in parallel.
+</p>
+</div>
+</div>
+<div id="outline-container-org8fa51b4" class="outline-2">
+<h2 id="org8fa51b4"><span class="section-number-2">8.</span> Remove EMC PowerPath</h2>
+<div class="outline-text-2" id="text-8">
+<p>
+Keep a copy if the inq output from before you remove powerpath.  This
+will be used to fix up the metadisks later and is required.  You can
+also use the scans run on the host before the change if they are
+available.
+</p>
+
+<pre class="example" id="org19b217c">
+pkgrm EMCpower
+/etc/emcp_cleanup
+</pre>
+
+<p>
+The cleanup script removes the EMC disk definitions from /dev/dsk/ and
+removes any of the existing setup of PowerPath, including:
+</p>
+
+<pre class="example" id="orga0c41f6">
+/etc/emcp_registration 
+/etc/emcp_devicesDB.dat  
+/etc/emcp_devicesDB.idx
+</pre>
+
+<p>
+If anything goes wrong later in the change the backout side will have
+copies of these files, if copies are required.  Do NOT modify the
+backout filesystems if you need copies of them.
+</p>
+</div>
+<div id="outline-container-org4d75f9e" class="outline-3">
+<h3 id="org4d75f9e"><span class="section-number-3">8.1.</span> (Optionally) Reboot the host and reconfigure:</h3>
+<div class="outline-text-3" id="text-8-1">
+<p>
+Its generally possible to install MPXIO (the next step) before the
+reboot of the system.  If you are unsure of the state of the system
+after removing PowerPath, or otherwise don't feel comfortable with
+this, reboot!
+</p>
+
+<pre class="example" id="orge212d89">
+touch /reconfigure
+</pre>
+
+<p>
+Then follow the reboot method needed from the section <a href="#orgbfeac8c">Rebooting SPARC and x86 Architecture hosts</a>.
+Ensure that you see /changedisk after the reboot.
+</p>
+</div>
+</div>
+</div>
+<div id="outline-container-orgb2e821b" class="outline-2">
+<h2 id="orgb2e821b"><span class="section-number-2">9.</span> Enable MPXIO</h2>
+<div class="outline-text-2" id="text-9">
+<p>
+NOTE: This section does not apply to Solaris10 U4 and earlier.
+stmsboot should be there in U4 but appears to be AWOL in the TELUS
+image (or maybe it was missing in the U4 release we got 8 years ago?).
+Either way, you will need to enable MPXIO manually and ensure that
+devices are properly renamed.  If you are not comfortable with this
+proceedure talk with Chris Bayly or Kevin Strike.  This document might
+be updated at a later date for the full procedure, but at the moment
+I'm in the middle of a storage migration (I know, it figures).
+</p>
+
+<pre class="example" id="org16c2317">
+stmsboot -D fp -e
+
+# Unless you are on (SOME VERSIONS OF?!?) i386, then you would run:
+
+stmsboot -e
+</pre>
+
+<p>
+Follow the prompts and allow the host to reboot.
+</p>
+
+<p>
+Ensure that you see /changedisk after the reboot.  If not, reboot to
+the correct side following the method needed from <a href="#orgbfeac8c">Rebooting SPARC and
+x86 Architecture hosts</a>.
+</p>
+</div>
+</div>
+<div id="outline-container-orgd82c761" class="outline-2">
+<h2 id="orgd82c761"><span class="section-number-2">10.</span> Fix up the md.tab</h2>
+<div class="outline-text-2" id="text-10">
+<p>
+Here we will be replacing the old emcpowerXc names for disks with their new MPXIO device names.
+</p>
+
+<p>
+Backup the existing /etc/lvm/md.{tab|cf}
+</p>
+
+<pre class="example" id="orgd59d0b0">
+cd /etc/lvm/
+cp md.tab md.tab.before-migration
+cp md.cf md.cf.before-migration
+</pre>
+
+<p>
+Copy the md.cf to md.tab.  I know what you're saying at this point,
+"but Chris, they look so different!"&#x2026;  Trust me, copy the md.cf to
+md.tab.
+</p>
+
+<pre class="example" id="orgdafd9b7">
+cp /etc/lvm/md.cf /etc/lvm/md.tab
+</pre>
+
+<p>
+Have the inq output you saved from before powerpath was removed, and
+the current inq (after MPXIO was enabled) sitting nearby.
+</p>
+
+<p>
+Edit the md.tab file such that all instances of emcpowerXc are
+replaced with the new name for that lun.  For example in the old inq
+output you might have a line that looks like this:
+</p>
+
+<pre class="example" id="org54616b3">
+/dev/rdsk/emcpower0c              :DGC     :RAID 5          :0326  :8C000094   :31457280 
+</pre>
+
+<p>
+You will need to match that (by the serial number) to the new device
+name in the new inq output that might look like this:
+</p>
+
+<pre class="example" id="org9f8bb9c">
+/dev/rdsk/c0t6006016045AB1A005C092A5035A8DC11d0s2 :DGC     :RAID 5          :0326  :8C000094   :31457280
+</pre>
+
+<p>
+Check and recheck that the new long names are the correct replacements
+for the original emcpowerXc names.  Any mixup here will likely lead to
+the destruction of data.
+</p>
+</div>
+</div>
+<div id="outline-container-org16695ab" class="outline-2">
+<h2 id="org16695ab"><span class="section-number-2">11.</span> Fix the metadevices</h2>
+<div class="outline-text-2" id="text-11">
+<p>
+For all of the metadevices that currently show an emcpower device
+being attached, metaclear them.  This will be complicated by any soft
+partitions that are built on top of them.
+</p>
+
+<p>
+Find all of the soft partitions on the target disks. The following
+code assumes that the target disks have "emcpower" names, you will
+have to adapt this if the system uses WWN style naming conventions.
+</p>
+
+<pre class="example" id="org9150880">
+# for blah in `metastat -p | awk '/^d.*emcpo/ {print $1;}'` ; do metastat -c | egrep "(^ *$blah |$blah$)" ; done
+d103             p   20GB d30
+d104             p  1.1GB d30
+d102             p  2.0GB d30
+d101             p  500MB d30
+d100             p  2.0GB d30
+    d30          s   29GB /dev/dsk/emcpower0a
+d125             p  8.0GB d31
+d123             p   10GB d31
+d124             p  1.1GB d31
+d122             p  2.0GB d31
+d121             p  500MB d31
+d120             p  2.0GB d31
+    d31          s   29GB /dev/dsk/emcpower1a
+d83              p  1.8GB d34
+d82              p   18GB d34
+    d34          s   19GB /dev/dsk/emcpower6a
+d162             p   22GB d33
+d163             p   32GB d33
+d164             p  1.1GB d33
+d161             p  500MB d33
+d160             p  2.0GB d33
+    d33          s   79GB /dev/dsk/emcpower3a /dev/dsk/emcpower4c /dev/dsk/emcpower5c
+</pre>
+
+<p>
+If all of those devices make sense (they are partitions and slices
+built on top of EMC power devices), then you can clear them, possibly
+with a script like this:
+</p>
+
+<pre class="example" id="org69957f9">
+# for blah in `metastat -p | awk '/^d.*emcpo/ {print $1;}'` ; do echo metaclear -pf $blah ; echo metaclear $blah ; done
+metaclear -pf d30
+metaclear -pf d31
+metaclear -pf d32
+metaclear -pf d33
+metaclear -pf d34
+</pre>
+
+<p>
+Obviously you will have to cut/paste the output from the script to
+actually clear the devices.
+</p>
+
+<p>
+Once these are removed you can recreate them with the new device
+names.  First we will check that the md.tab we created above makes
+sense:
+</p>
+
+<pre class="example" id="org8a2c4ae">
+metainit -a -n
+</pre>
+
+<p>
+The output from this will show some errors about existing partitions
+(d0, for example), but should not show any errors for the partitions
+we would like to recreate.  If this passes the smell test, run the following:
+</p>
+
+<pre class="example" id="org102bb7b">
+metainit -a
+</pre>
+
+<p>
+Check that all of the metadevices (softpartitions and slices) have
+been recreated.  If they haven't you will have to debug what happened
+with the metainit, checking for errors in the output and possibly
+/var/adm/messages
+</p>
+
+<p>
+At least once I've had to create each of the top level metadevices
+with a command like this:
+</p>
+
+<pre class="example" id="orgce16006">
+metainit d32
+</pre>
+
+<p>
+Hopefully you will see a tree of devices pointing at MPXIO device
+names, and soft partitions built on top of them, like this (and yes,
+the disks shown here don't match previous examples):
+</p>
+
+<pre class="example" id="org40bc560">
+d162             p   22GB d33
+d163             p   32GB d33
+d164             p  1.1GB d33
+d161             p  500MB d33
+d160             p  2.0GB d33
+    d33          s   79GB /dev/dsk/c0t60060E8007DC40000030DC400000E42Ad0s0 /dev/dsk/c0t60060E8007DC40000030DC400000E42Dd0s0 /dev/dsk/c0t60060E8007DC40000030DC400000E429d0s0
+</pre>
+</div>
+</div>
+<div id="outline-container-org7871963" class="outline-2">
+<h2 id="org7871963"><span class="section-number-2">12.</span> Preparation of destination (Hitachi) disks</h2>
+<div class="outline-text-2" id="text-12">
+<p>
+Find all of the destination hitachi disks using "inq" making sure that
+the WWN's on the list match what you are expecting:
+</p>
+
+<pre class="example" id="org0c196c7">
+# inq -no_dots
+Inquiry utility, Version V7.3-561 (Rev 1.0)      (SIL Version V5.5.1.0 (Edit Level 561)
+Copyright (C) by EMC Corporation, all rights reserved.
+For help type inq -h.
+--------------------------------------------------------------------------------------------------------
+DEVICE                                            :VEND    :PROD            :REV   :SER NUM    :CAP(kb)
+--------------------------------------------------------------------------------------------------------
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Ad0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Bd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :57671680
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Cd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :57671680
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Dd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :78643200
+/dev/rdsk/c0t60060E8007DC40000030DC400000E426d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E427d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E428d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E429d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t6006016045AB1A00B0D8CB1A09D1DC11d0s2 :DGC     :RAID 10         :0326  :ED0000D5   :20971520
+/dev/rdsk/c0t6006016045AB1A00C01B4F8C35A8DC11d0s2 :DGC     :RAID 5          :0326  :8F000097   :31457280
+/dev/rdsk/c0t6006016045AB1A00C6D46FEE07DFDC11d0s2 :DGC     :RAID 10         :0326  :EF000083   :52428800
+/dev/rdsk/c0t6006016045AB1A00D8A7C26035A8DC11d0s2 :DGC     :RAID 5          :0326  :8D000095   :31457280
+/dev/rdsk/c0t6006016045AB1A005C092A5035A8DC11d0s2 :DGC     :RAID 5          :0326  :8C000094   :31457280
+/dev/rdsk/c0t6006016045AB1A00449CC07535A8DC11d0s2 :DGC     :RAID 5          :0326  :8E000096   :31457280
+/dev/rdsk/c0t6006016045AB1A00941B70E307DFDC11d0s2 :DGC     :RAID 10         :0326  :EE000082   :52428800
+/dev/rdsk/c0t6006016045AB1A0048807214CAEEDC11d0s2 :DGC     :RAID 5          :0326  :2600003B   :73400320
+/dev/rdsk/c6t0d0s2                                :FUJITSU :MAY2073RCSUN72G :0501  :0733S0DA   :71687369
+/dev/rdsk/c6t1d0s2                                :FUJITSU :MAY2073RCSUN72G :0501  :0733S0DB   :71687369
+/dev/rdsk/c6t2d0s2                                :FUJITSU :MAY2073RCSUN72G :0501  :0734S0DD   :71687369
+/dev/rdsk/c6t3d0s2                                :FUJITSU :MAY2073RCSUN72G :0501  :0734S0DD   :71687369
+</pre>
+
+
+<p>
+For each disk, especially on x86, ensure that the new disks have disk
+labels on them that allow full use by Solaris, this will allow the
+disk to be labeled and slices created.
+</p>
+
+<pre class="example" id="org61de5d5">
+fdisk -B /dev/rdsk/&lt;HITACHI DISK NAME&gt;
+</pre>
+
+<p>
+Then create a Solaris slice at least one track into the disk. SVM will
+prevent a disk from being added to the mirror if it has a disk label
+(if you are trying to use a slice that starts at Sector/Track zero).
+</p>
+
+<p>
+FIXME this has more to do with the existing disk, basically you can't
+      mix labeled and non-labeled disks
+</p>
+
+<p>
+Possibly use my script to do this (not completed at the writing of
+this), or else take a look at the prtvtoc for the device, and create a
+slice 0 that starts on the second track of the disk. For example here
+is a disk that has the correct partition 0 created:
+</p>
+
+<pre class="example" id="org65d9894">
+root@sedm1825:adm# prtvtoc /dev/dsk/c0t60060E8007DC40000030DC400000E429d0s2
+* /dev/dsk/c0t60060E8007DC40000030DC400000E429d0s2 partition map
+*
+* Dimensions:
+*     512 bytes/sector
+*      63 sectors/track
+*     255 tracks/cylinder
+*   16065 sectors/cylinder
+*    4567 cylinders
+*    4565 accessible cylinders
+*
+* Flags:
+*   1: unmountable
+*  10: read-only
+*
+*                          First     Sector    Last
+* Partition  Tag  Flags    Sector     Count    Sector  Mount Directory
+      0      4    00      16065  73320660  73336724
+      2      5    01          0  73336725  73336724
+      8      1    01          0     16065     16064
+</pre>
+
+<p>
+Note that partition 0 starts 16065 sectors into the disk (the same
+number of sectors on a cylinder as stated earlier in the prtvtoc
+output.
+</p>
+</div>
+</div>
+<div id="outline-container-org6968e0a" class="outline-2">
+<h2 id="org6968e0a"><span class="section-number-2">13.</span> Mirroring the disks (why we are here&#x2026;)</h2>
+<div class="outline-text-2" id="text-13">
+<p>
+There are two main scenarios you are likely to see for the mirroring
+of the disks.  Take a look at the output of:
+</p>
+
+<pre class="example" id="orge1d8396">
+metastat -c
+</pre>
+
+<p>
+The SAN attached devices will either show up as mirrors or not.
+</p>
+
+<p>
+Example of a mirrored device (note that the softpartitions are build
+on top of the mirror device, not the concat/stripe d40:
+</p>
+<pre class="example" id="org270acdc">
+d100             p  2.0GB d400
+    d400         m   29GB d40
+        d40      s   34GB /dev/dsk/c0t60060E8007DC40000030DC400000E429d0s0
+</pre>
+
+<p>
+Example of a non-mirrored device, you are more likely to run across
+this.  In this example the softpartitions are build directly onto the
+concat/stripe:
+</p>
+<pre class="example" id="orgff41ee7">
+d162             p   22GB d33
+d163             p   32GB d33
+d164             p  1.1GB d33
+d161             p  500MB d33
+d160             p  2.0GB d33
+    d33          s   79GB /dev/dsk/c0t60060E8007DC40000030DC400000E42Ad0s0 /dev/dsk/c0t60060E8007DC40000030DC400000E42Dd0s0 /dev/dsk/c0t60060E8007DC40000030DC400000E429d0s0
+</pre>
+
+<p>
+In either scenario there will be a lot of "determining as you go" to
+figure out naming conventions for the devices you will create.  I
+would highly suggest following any standard that already exists on the
+host if at all possible, so there is the least surprise for future
+SA's looking at the host.
+</p>
+</div>
+<div id="outline-container-org90a2a98" class="outline-3">
+<h3 id="org90a2a98"><span class="section-number-3">13.1.</span> Metadevices without existing mirror devices</h3>
+<div class="outline-text-3" id="text-13-1">
+<p>
+We will be building a mirror device on top of the existing
+concat/stripe device, so that we can add the hitachi devices and sync
+to them.  When we are done we will remove the EMC disks, and leave the
+remaining hitachi disk attached to the, now one-legged, mirror device.
+Future migrations can use this mirror device to make their life easier.
+</p>
+
+<p>
+For the examples below the disks d30 through d34 will be the original
+EMC concat/stripe devices and the new hitachi devices will be d40
+through d44, such that d30 and d40 are mirrored, and so on.
+</p>
+</div>
+<div id="outline-container-org2752316" class="outline-4">
+<h4 id="org2752316"><span class="section-number-4">13.1.1.</span> Create a mapping of old to new devices</h4>
+<div class="outline-text-4" id="text-13-1-1">
+<p>
+For each of the existing EMC backed metadevices we are going to want
+to create a similar sized Hitachi backed metadevice.  Use the closest
+(but larger) sized hitachi LUNs to the sizes of the EMC disks.
+</p>
+
+<p>
+First, find the details about the existing disk, we are going to start
+with d31, but this needs to be repeated for ALL of the affected
+metadevices:
+</p>
+
+<pre class="example" id="orgcc2f2ca">
+# metastat -c d31
+d31              s  95GB /dev/dsk/c0t6006016045AB1A00C6D46FEE07DFDC11d0s0 /dev/dsk/c0t6006016045AB1A0048807214CAEEDC11d0s0
+</pre>
+
+<p>
+Note down the disk devices that make up the metadevice, and find the
+sizes of those luns from inq, note that depending on how the disk was
+being setup you might want to remove the slice number on the end of
+the device name for easier grepping:
+</p>
+
+<pre class="example" id="org1c44b0b">
+# inq -no_dots | egrep '(c0t6006016045AB1A00C6D46FEE07DFDC11d0|c0t6006016045AB1A0048807214CAEEDC11d0)'
+/dev/rdsk/c0t6006016045AB1A00C6D46FEE07DFDC11d0s2 :DGC     :RAID 10         :0326  :EF000083   :52428800
+/dev/rdsk/c0t6006016045AB1A0048807214CAEEDC11d0s2 :DGC     :RAID 5          :0326  :2600003B   :73400320
+</pre>
+
+<p>
+I used all the info here to create a chart like this (we'll get to how we chose Hitachi LUN's in a minute):
+</p>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-right" />
+
+<col  class="org-left" />
+
+<col  class="org-left" />
+
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<thead>
+<tr>
+<th scope="col" class="org-left">Orig</th>
+<th scope="col" class="org-right">Orig Size</th>
+<th scope="col" class="org-left">EMC Disks</th>
+<th scope="col" class="org-left">New</th>
+<th scope="col" class="org-left">Hitachi Disk</th>
+<th scope="col" class="org-left">Mirror</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-left">d30</td>
+<td class="org-right">31457280</td>
+<td class="org-left">c0t6006016045AB1A005C092A5035A8DC11d0s0</td>
+<td class="org-left">d40</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E429d0s0</td>
+<td class="org-left">d400</td>
+</tr>
+
+<tr>
+<td class="org-left">d31</td>
+<td class="org-right">52428800 + 31457280</td>
+<td class="org-left">c0t6006016045AB1A00C6D46FEE07DFDC11d0s0 c0t6006016045AB1A0048807214CAEEDC11d0s0</td>
+<td class="org-left">d41</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E42Ad0s2 c0t60060E8007DC40000030DC400000E42Dd0s0</td>
+<td class="org-left">d401</td>
+</tr>
+
+<tr>
+<td class="org-left">d32</td>
+<td class="org-right">31457280</td>
+<td class="org-left">c0t6006016045AB1A00449CC07535A8DC11d0s0</td>
+<td class="org-left">d42</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E428d0s0</td>
+<td class="org-left">d402</td>
+</tr>
+
+<tr>
+<td class="org-left">d33</td>
+<td class="org-right">31457280</td>
+<td class="org-left">c0t6006016045AB1A00D8A7C26035A8DC11d0s0</td>
+<td class="org-left">d43</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E427d0s0</td>
+<td class="org-left">d403</td>
+</tr>
+
+<tr>
+<td class="org-left">d34</td>
+<td class="org-right">20971520</td>
+<td class="org-left">c0t6006016045AB1A00B0D8CB1A09D1DC11d0s0</td>
+<td class="org-left">d44</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E426d0s0</td>
+<td class="org-left">d404</td>
+</tr>
+
+<tr>
+<td class="org-left">d142</td>
+<td class="org-right">52428800</td>
+<td class="org-left">c0t6006016045AB1A00941B70E307DFDC11d0s0</td>
+<td class="org-left">d45</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E42Cd0s0</td>
+<td class="org-left">d405</td>
+</tr>
+
+<tr>
+<td class="org-left">d143</td>
+<td class="org-right">52428800</td>
+<td class="org-left">c0t6006016045AB1A00C6D46FEE07DFDC11d0s0</td>
+<td class="org-left">d46</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E42Bd0s0</td>
+<td class="org-left">d406</td>
+</tr>
+</tbody>
+</table>
+
+<p>
+Once the left hand side of this chart is filled in, you will want to
+start matching the original lun sizes to the available Hitachi disks.
+For example d30 shows that it is 31.4GB so the hitachi disk will need
+to be slightly larger then that.  Lets look at the available disks:
+</p>
+
+<pre class="example" id="orgb7231b1">
+# inq -no_dots | grep HITA | sort
+/dev/rdsk/c0t60060E8007DC40000030DC400000E426d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E427d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E428d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E429d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Ad0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Bd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :57671680
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Cd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :57671680
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Dd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :78643200
+</pre>
+
+<p>
+The obvious choice given these disks is to take the first disk showing
+a size of 36700160 and mark it down as the new destination/mirror for
+d30, so put it into the chart and cross it off the list of available disks.
+</p>
+
+<p>
+Choosing which disks will map to the originals is up to the reader.
+In some cases you might not have the same number of destination luns
+as source LUNs (i.e. if storage gave you a single 200gb LUN to replace
+2 x 95GB luns).  You will have to determine what layout of disk fits
+for what you have been given.
+</p>
+
+<p>
+At this point you should have the chart above filled in with your
+solution and are ready to continue.
+</p>
+</div>
+</div>
+<div id="outline-container-orga2c4e14" class="outline-4">
+<h4 id="orga2c4e14"><span class="section-number-4">13.1.2.</span> Initialize the Hitachi disks</h4>
+<div class="outline-text-4" id="text-13-1-2">
+<p>
+We will need to initialize the new metadevices for the Hitachi disks.
+For metadevices backed by a single disk the command will look like the
+following (with your metadevice name and disk device name of course!).
+</p>
+
+<p>
+NOTE: we always use slice 0 here (created when you prepared the
+Hitachi disk earlier) using slice 2 could prevent the mirror from
+attaching later on.:
+</p>
+
+<pre class="example" id="orgd1b218b">
+metainit d40 1 1 c0t60060E8007DC40000030DC400000E429d0s0
+</pre>
+
+<p>
+For metadevices that will be made up of more than one LUN, use the
+appropriate metainit command to create a concatenation of the LUN's:
+</p>
+
+<pre class="example" id="orgeabb8ab">
+metainit d41 2 1 c0t60060E8007DC40000030DC400000E42Ad0s0 1 c0t60060E8007DC40000030DC400000E42Dd0s0
+</pre>
+
+<p>
+For three devices the command would look like "metainit dXX 3 1 &#x2026;.."   and so on.
+</p>
+
+<p>
+Repeat this for all of the new metadevices.
+</p>
+</div>
+</div>
+<div id="outline-container-orgbe6307e" class="outline-4">
+<h4 id="orgbe6307e"><span class="section-number-4">13.1.3.</span> Mirroring EMC and Hitachi</h4>
+<div class="outline-text-4" id="text-13-1-3">
+<p>
+So now that we have EMC and Hitachi backed metadevices it should be
+simple to mirror things? Right?  Nope, there's one last layer of
+complication.  For any of the original metadevices containing
+softpartitions, the softpartitions need to be removed, and then
+attached to the mirror device.
+</p>
+
+<p>
+In this example we can see d34 has two soft partitions attached to it.
+</p>
+
+<pre class="example" id="orgf34db17">
+# metastat -p | grep d34 | sort
+d34 1 1 /dev/dsk/c0t6006016045AB1A00B0D8CB1A09D1DC11d0s0
+d82 -p d34 -o 32 -b 4194304  -o 7864416 -b 33554432
+d83 -p d34 -o 4194368 -b 3670016
+</pre>
+
+<p>
+For each metadevice with soft partitions built on top of it, capture
+the soft partition info shown above.
+</p>
+
+<p>
+Remove the soft partition metadevices:
+</p>
+
+<pre class="example" id="org3e25be0">
+metaclear d82
+metaclear d83
+</pre>
+
+<p>
+Create a new mirror device with only the EMC disk attached (following
+our chart from earlier), and then recreate the soft partitions
+described above, but attached to the new mirror device, all other
+options staying exactly the same.
+</p>
+
+<pre class="example" id="org1e48052">
+metainit d404 -m d34
+metainit d82 -p d404 -o 32 -b 4194304  -o 7864416 -b 33554432
+metainit d83 -p d404 -o 4194368 -b 3670016
+</pre>
+
+<p>
+Verify that the new mirror device looks correct (has the soft
+partitions attached, etc):
+</p>
+
+<pre class="example" id="orga8b7a9e">
+# metastat -p | awk '/(d404|d34)/' | sort
+d404 -m d34 1
+d34 1 1 /dev/dsk/c0t6006016045AB1A00B0D8CB1A09D1DC11d0s0
+d82 -p d404 -o 32 -b 4194304  -o 7864416 -b 33554432
+d83 -p d404 -o 4194368 -b 3670016
+</pre>
+
+<p>
+After all of the metadevices have been converted into one legged
+mirrors and the soft partitions reattached we can attach the Hitachi
+metadevices and begin the resilvering process.
+</p>
+
+<p>
+For each line in the chart above, attach the Hitachi metadevice to the
+mirror device like so:
+</p>
+
+<pre class="example" id="orge11306c">
+metattach d400 d40
+metattach d401 d41
+metattach d402 d42
+metattach d403 d43
+metattach d404 d44
+metattach d405 d45
+metattach d406 d46
+</pre>
+
+<p>
+And check that the mirroring is proceeding:
+</p>
+
+<pre class="example" id="org95c67a6">
+# metastat -c
+.
+.
+d164             p  1.1GB d403
+d163             p  2.0GB d403
+d162             p  7.0GB d403
+d161             p  500MB d403
+d160             p  2.0GB d403
+    d403         m   29GB d33 d43 (resync-19%)
+        d33      s   29GB /dev/dsk/c0t6006016045AB1A00D8A7C26035A8DC11d0s0
+        d43      s   34GB /dev/dsk/c0t60060E8007DC40000030DC400000E427d0s0
+.
+.
+</pre>
+</div>
+</div>
+</div>
+<div id="outline-container-org427ddee" class="outline-3">
+<h3 id="org427ddee"><span class="section-number-3">13.2.</span> Metadevices with existing mirror devices</h3>
+<div class="outline-text-3" id="text-13-2">
+</div>
+<div id="outline-container-org4e5046e" class="outline-4">
+<h4 id="org4e5046e"><span class="section-number-4">13.2.1.</span> Create a mapping of old to new devices</h4>
+<div class="outline-text-4" id="text-13-2-1">
+<p>
+For each of the existing EMC backed metadevices we are going to want
+to create a similar sized Hitachi backed metadevice.  Use the closest
+(but larger) sized hitachi LUNs to the sizes of the EMC disks.
+</p>
+
+<p>
+First, find the details about the existing disk, we are going to start
+with d31, but this needs to be repeated for ALL of the affected
+metadevices:
+</p>
+
+<pre class="example" id="orgda34582">
+# metastat -c
+.
+.
+d124             p  1.1GB d401
+d123             p   52GB d401
+d122             p  2.0GB d401
+d121             p  500MB d401
+d120             p  2.0GB d401
+    d401         m   99GB d41
+        d41      s  109GB /dev/dsk/c0t60060E8007DC40000030DC400000E42Ad0s0 /dev/dsk/c0t60060E8007DC40000030DC400000E42Dd0s0
+.
+.
+</pre>
+
+<p>
+Note down the disk devices that make up the metadevice, and find the
+sizes of those luns from inq, note that depending on how the disk was
+being setup you might want to remove the slice number on the end of
+the device name for easier grepping:
+</p>
+
+<pre class="example" id="org20146db">
+# inq -no_dots | egrep '(c0t6006016045AB1A00C6D46FEE07DFDC11d0|c0t6006016045AB1A0048807214CAEEDC11d0)'
+/dev/rdsk/c0t6006016045AB1A00C6D46FEE07DFDC11d0s2 :DGC     :RAID 10         :0326  :EF000083   :52428800
+/dev/rdsk/c0t6006016045AB1A0048807214CAEEDC11d0s2 :DGC     :RAID 5          :0326  :2600003B   :73400320
+</pre>
+
+<p>
+I used all the info here to create a chart like this (we'll get to how we chose Hitachi LUN's in a minute):
+</p>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-left" />
+
+<col  class="org-right" />
+
+<col  class="org-left" />
+
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<thead>
+<tr>
+<th scope="col" class="org-left">OrigMirror</th>
+<th scope="col" class="org-left">OrigMD</th>
+<th scope="col" class="org-right">Orig Size</th>
+<th scope="col" class="org-left">EMC Disks</th>
+<th scope="col" class="org-left">NewMD</th>
+<th scope="col" class="org-left">Hitachi Disk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-left">d400</td>
+<td class="org-left">d30</td>
+<td class="org-right">31457280</td>
+<td class="org-left">c0t6006016045AB1A005C092A5035A8DC11d0s0</td>
+<td class="org-left">d40</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E429d0s0</td>
+</tr>
+
+<tr>
+<td class="org-left">d401</td>
+<td class="org-left">d31</td>
+<td class="org-right">52428800 + 31457280</td>
+<td class="org-left">c0t6006016045AB1A00C6D46FEE07DFDC11d0s0 c0t6006016045AB1A0048807214CAEEDC11d0s0</td>
+<td class="org-left">d41</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E42Ad0s2 c0t60060E8007DC40000030DC400000E42Dd0s0</td>
+</tr>
+
+<tr>
+<td class="org-left">d402</td>
+<td class="org-left">d32</td>
+<td class="org-right">31457280</td>
+<td class="org-left">c0t6006016045AB1A00449CC07535A8DC11d0s0</td>
+<td class="org-left">d42</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E428d0s0</td>
+</tr>
+
+<tr>
+<td class="org-left">d403</td>
+<td class="org-left">d33</td>
+<td class="org-right">31457280</td>
+<td class="org-left">c0t6006016045AB1A00D8A7C26035A8DC11d0s0</td>
+<td class="org-left">d43</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E427d0s0</td>
+</tr>
+
+<tr>
+<td class="org-left">d404</td>
+<td class="org-left">d34</td>
+<td class="org-right">20971520</td>
+<td class="org-left">c0t6006016045AB1A00B0D8CB1A09D1DC11d0s0</td>
+<td class="org-left">d44</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E426d0s0</td>
+</tr>
+
+<tr>
+<td class="org-left">d405</td>
+<td class="org-left">d142</td>
+<td class="org-right">52428800</td>
+<td class="org-left">c0t6006016045AB1A00941B70E307DFDC11d0s0</td>
+<td class="org-left">d45</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E42Cd0s0</td>
+</tr>
+
+<tr>
+<td class="org-left">d406</td>
+<td class="org-left">d143</td>
+<td class="org-right">52428800</td>
+<td class="org-left">c0t6006016045AB1A00C6D46FEE07DFDC11d0s0</td>
+<td class="org-left">d46</td>
+<td class="org-left">c0t60060E8007DC40000030DC400000E42Bd0s0</td>
+</tr>
+</tbody>
+</table>
+
+<p>
+Once the left hand side of this chart is filled in, you will want to
+start matching the original lun sizes to the available Hitachi disks.
+For example d30 shows that it is 31.4GB so the hitachi disk will need
+to be slightly larger then that.  Lets look at the available disks:
+</p>
+
+<pre class="example" id="org89a059c">
+# inq -no_dots | grep HITA | sort
+/dev/rdsk/c0t60060E8007DC40000030DC400000E426d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E427d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E428d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E429d0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Ad0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :36700160
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Bd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :57671680
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Cd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :57671680
+/dev/rdsk/c0t60060E8007DC40000030DC400000E42Dd0s2 :HITACHI :OPEN-V          :8001  :5030DC40   :78643200
+</pre>
+
+<p>
+The obvious choice given these disks is to take the first disk showing
+a size of 36700160 and mark it down as the new destination/mirror for
+d30, so put it into the chart and cross it off the list of available disks.
+</p>
+
+<p>
+Choosing which disks will map to the originals is up to the reader.
+In some cases you might not have the same number of destination luns
+as source LUNs (i.e. if storage gave you a single 200gb LUN to replace
+2 x 95GB luns).  You will have to determine what layout of disk fits
+for what you have been given.
+</p>
+
+<p>
+At this point you should have the chart above filled in with your
+solution and are ready to continue.
+</p>
+</div>
+</div>
+<div id="outline-container-org750a0cd" class="outline-4">
+<h4 id="org750a0cd"><span class="section-number-4">13.2.2.</span> Initialize the Hitachi disks</h4>
+<div class="outline-text-4" id="text-13-2-2">
+<p>
+We will need to initialize the new metadevices for the Hitachi disks.
+For metadevices backed by a single disk the command will look like the
+following (with your metadevice name and disk device name of course!).
+</p>
+
+<p>
+NOTE: we always use slice 0 here (created when you prepared the
+Hitachi disk earlier) using slice 2 could prevent the mirror from
+attaching later on.:
+</p>
+
+<pre class="example" id="org107212c">
+metainit d40 1 1 c0t60060E8007DC40000030DC400000E429d0s0
+</pre>
+
+<p>
+For metadevices that will be made up of more than one LUN, use the
+appropriate metainit command to create a concatenation of the LUN's:
+</p>
+
+<pre class="example" id="orgdddd0e3">
+metainit d41 2 1 c0t60060E8007DC40000030DC400000E42Ad0s0 1 c0t60060E8007DC40000030DC400000E42Dd0s0
+</pre>
+
+<p>
+For three devices the command would look like "metainit dXX 3 1 &#x2026;.."   and so on.
+</p>
+
+<p>
+Repeat this for all of the new metadevices.
+</p>
+</div>
+</div>
+<div id="outline-container-org32af830" class="outline-4">
+<h4 id="org32af830"><span class="section-number-4">13.2.3.</span> Mirroring EMC and Hitachi</h4>
+<div class="outline-text-4" id="text-13-2-3">
+<p>
+After checking the state of the existing mirror (no missing devices,
+etc) we can attach the Hitachi metadevices and begin the resilvering
+process.
+</p>
+
+<p>
+For each line in the chart above, attach the Hitachi metadevice to the
+mirror device like so:
+</p>
+
+<pre class="example" id="org832ffda">
+metattach d400 d40
+metattach d401 d41
+metattach d402 d42
+metattach d403 d43
+metattach d404 d44
+metattach d405 d45
+metattach d406 d46
+</pre>
+
+<p>
+And check that the mirroring is proceeding:
+</p>
+
+<pre class="example" id="org8987813">
+# metastat -c
+.
+.
+d164             p  1.1GB d403
+d163             p  2.0GB d403
+d162             p  7.0GB d403
+d161             p  500MB d403
+d160             p  2.0GB d403
+    d403         m   29GB d33 d43 (resync-19%)
+        d33      s   29GB /dev/dsk/c0t6006016045AB1A00D8A7C26035A8DC11d0s0
+        d43      s   34GB /dev/dsk/c0t60060E8007DC40000030DC400000E427d0s0
+.
+.
+</pre>
+</div>
+</div>
+</div>
+<div id="outline-container-org70cc140" class="outline-3">
+<h3 id="org70cc140"><span class="section-number-3">13.3.</span> After the mirroring starts</h3>
+<div class="outline-text-3" id="text-13-3">
+<p>
+Obviously after the mirroring has started, you will want to remount
+the storage.  For soft partitions this is a simple matter of
+uncommenting the entries in /etc/vfstab, or letting the entries in the
+zone config mount the storage.
+</p>
+
+<p>
+For devices that were not on soft partitions, you will need to modify
+the device name to reflect the new mirror device that we (possibly)
+created in earlier steps.  Consult the charts created earlier to find
+the old name and the new name of the device, and modify /etc/vfstab or
+the zone config entry appropriately.  This will likely only apply when
+you created new mirror devices.
+</p>
+</div>
+</div>
+</div>
+<div id="outline-container-org7a1702b" class="outline-2">
+<h2 id="org7a1702b"><span class="section-number-2">14.</span> Things to do before the end of the change</h2>
+<div class="outline-text-2" id="text-14">
+</div>
+<div id="outline-container-org7eca0f3" class="outline-3">
+<h3 id="org7eca0f3"><span class="section-number-3">14.1.</span> Restore the autoboot flag to the zones that were modified in "<a href="#org3be6a2b">Prepare the host for upgrading</a>":</h3>
+<div class="outline-text-3" id="text-14-1">
+<pre class="example" id="org3d6bd91">
+zonecfg -z &lt;zonename&gt; set autoboot=true
+</pre>
+</div>
+</div>
+<div id="outline-container-orgf1f4dc1" class="outline-3">
+<h3 id="orgf1f4dc1"><span class="section-number-3">14.2.</span> Fix /etc/vfstab</h3>
+<div class="outline-text-3" id="text-14-2">
+<p>
+Modify /etc/vfstab so that it mounts the same filesystems that were
+there at the beginning of the change.
+</p>
+</div>
+</div>
+<div id="outline-container-orga7560fd" class="outline-3">
+<h3 id="orga7560fd"><span class="section-number-3">14.3.</span> (Optional) Sync root &amp; /var mirrors</h3>
+<div class="outline-text-3" id="text-14-3">
+<p>
+This is assuming that the change was 100% successful and there is no
+chance it should be rolled back.  This will use the same device names
+as shown when we created the rollback.  Your device names might be
+different.  Your change might also tell you to do this step later in
+another change window.
+</p>
+
+<pre class="example" id="orgf8004d9">
+df -k / /var        # Ensure that we're on d0 and d3 for / and /var
+ls -l /changedisk   # make sure this is the disk we changed.
+metaclear d90
+metaclear d93
+metattach d0 d20
+metattach d3 d23
+metastat -c d0 d3   # Keep checking devices until sync is complete
+rm /changedisk /var/changevardisk
+</pre>
+</div>
+</div>
+<div id="outline-container-org6a38c78" class="outline-3">
+<h3 id="org6a38c78"><span class="section-number-3">14.4.</span> Check the state of the system bootlist (eeprom)</h3>
+<div class="outline-text-3" id="text-14-4">
+<p>
+Verify that the system has both paths in the bootlist (i.e. that it
+will try both disks in the root mirror, so if one fails we start from
+the other).
+</p>
+</div>
+</div>
+<div id="outline-container-org0b043de" class="outline-3">
+<h3 id="org0b043de"><span class="section-number-3">14.5.</span> Final sanity reboot and checks of above steps</h3>
+<div class="outline-text-3" id="text-14-5">
+<p>
+For this particular reboot we are also checking that the system
+properly reboots without manual intervention.  The two cases we want
+to check for are, where the root mirrors have been resynced, where the
+root mirrors are still split (waiting for the post-task).  Either way
+we want the host to reboot naturally to the "correct" disk.  Unlike
+earlier do NOT follow the reboot section at the top of this document.
+Just reboot the host.
+</p>
+
+<pre class="example" id="orgcc1768b">
+# reboot
+</pre>
+
+<ul class="org-ul">
+<li>Insure after the reboot you are on the correct side of the mirror
+(if they are still split).  Check that we're on the change disk.</li>
+</ul>
+<pre class="example" id="org6f60666">
+# ls -ld /*disk* /var/*disk*
+</pre>
+
+<ul class="org-ul">
+<li>Check for mounted filesystems. Compare "df -k" to the output from
+before the change.</li>
+
+<li>Check for the right zones running. Compare the output of "zoneadm
+list -civ" to the original notes taken during the preparation for
+the change.  Are all the same zones running and not running?</li>
+
+<li>Check the status of the disk</li>
+</ul>
+<pre class="example" id="org61dfb79">
+inq
+mpathadm list lu  # Do you see an appropriate number of paths?
+</pre>
+
+<ul class="org-ul">
+<li>Hand the system back to the apps team (inform the PM, etc)</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>
